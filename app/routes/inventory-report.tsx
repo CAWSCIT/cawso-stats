@@ -75,6 +75,53 @@ function parseInventoryData(): ProductGroup[] {
   });
 }
 
+function escapeCsvValue(value: string | number | null): string {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function generateCsv(productGroups: ProductGroup[]): string {
+  const rows: string[] = [];
+
+  for (const product of productGroups) {
+    for (const variant of product.variants) {
+      for (const level of variant.inventoryLevels) {
+        const row = [
+          escapeCsvValue(product.title),
+          escapeCsvValue(variant.title),
+          escapeCsvValue(variant.sku),
+          escapeCsvValue(product.manufacturer),
+          escapeCsvValue(level.location),
+          level.available,
+          level.onHand,
+          variant.reorderPoint ?? "",
+          level.committed,
+        ].join(",");
+        rows.push(row);
+      }
+    }
+  }
+
+  return rows.join("\n");
+}
+
+function downloadCsv(productGroups: ProductGroup[]) {
+  const csv = generateCsv(productGroups);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "inventory-report.csv";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 export default function InventoryReport() {
   const productGroups = parseInventoryData();
   const columnHeaders = ["Variant", "SKU", "Pref. Vendor", "Location", "Available", "On Hand", "Reorder Point", "On Sales Order"];
@@ -90,9 +137,17 @@ export default function InventoryReport() {
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-950 p-8 print:p-0 print:ml-1.5">
-      <h1 className="text-3xl font-bold mb-6 text-gray-900 dark:text-white print:text-base print:mb-2">
-        Inventory Report
-      </h1>
+      <div className="flex items-center justify-between mb-6 print:mb-2">
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white print:text-base">
+          Inventory Report
+        </h1>
+        <button
+          onClick={() => downloadCsv(productGroups)}
+          className="px-4 py-2 text-sm font-medium text-white bg-gray-800 rounded-lg hover:bg-gray-700 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors print:hidden"
+        >
+          Download CSV
+        </button>
+      </div>
 
       {/* Column headers - visible only in print, shown once at the top */}
       <div className="hidden print:block">
