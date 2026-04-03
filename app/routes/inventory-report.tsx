@@ -13,28 +13,47 @@ interface InventoryLevel {
   available: number;
   onHand: number;
   committed: number;
-  incoming: number;
 }
 
 interface VariantData {
   title: string;
   sku: string;
+  reorderPoint: number | null;
   inventoryLevels: InventoryLevel[];
 }
 
 interface ProductGroup {
   title: string;
+  manufacturer: string | null;
   variants: VariantData[];
 }
 
 function parseInventoryData(): ProductGroup[] {
   const products = responseData.data.products.nodes;
 
-  return products.map((product) => ({
-    title: product.title,
-    variants: product.variants.nodes.map((variant) => ({
+  return products.map((product) => {
+    const manufacturerMetafield = product.metafields.nodes.find(
+      (mf) => mf.reference?.fields?.some(
+        (f: { key: string; value: string }) => f.key === "name"
+      )
+    );
+    const manufacturer = manufacturerMetafield?.reference?.fields?.find(
+      (f: { key: string; value: string }) => f.key === "name"
+    )?.value ?? null;
+
+    return {
+      title: product.title,
+      manufacturer,
+      variants: product.variants.nodes.map((variant) => {
+      const reorderMetafield = variant.metafields?.nodes?.find(
+        (mf: { key: string }) => mf.key === "custom.reorder_point"
+      );
+      const reorderPoint = reorderMetafield ? Number(reorderMetafield.value) : null;
+
+      return {
       title: variant.title,
       sku: variant.sku,
+      reorderPoint,
       inventoryLevels: variant.inventoryItem.inventoryLevels.nodes.map((level) => {
         const quantities = level.quantities.reduce(
           (acc: Record<string, number>, q: { name: string; quantity: number }) => {
@@ -48,11 +67,12 @@ function parseInventoryData(): ProductGroup[] {
           available: quantities.available ?? 0,
           onHand: quantities.on_hand ?? 0,
           committed: quantities.committed ?? 0,
-          incoming: quantities.incoming ?? 0,
         };
       }),
-    })),
-  }));
+    };
+    }),
+  };
+  });
 }
 
 export default function InventoryReport() {
@@ -69,16 +89,21 @@ export default function InventoryReport() {
             key={product.title}
             className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden"
           >
-            <div className="bg-gray-100 dark:bg-gray-800 px-4 py-3">
+            <div className="bg-gray-100 dark:bg-gray-800 px-4 py-3 flex items-baseline gap-3">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
                 {product.title}
               </h2>
+              {product.manufacturer && (
+                <span className="text-sm text-gray-500 dark:text-gray-400">
+                  Manufacturer: {product.manufacturer}
+                </span>
+              )}
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                 <thead className="bg-gray-50 dark:bg-gray-800/50">
                   <tr>
-                    {["Variant", "SKU", "Location", "Available", "On Hand", "Committed", "Incoming"].map(
+                    {["Variant", "SKU", "Manufacturer", "Reorder Point", "Location", "Available", "On Hand", "Committed"].map(
                       (header) => (
                         <th
                           key={header}
@@ -113,6 +138,22 @@ export default function InventoryReport() {
                             {variant.sku}
                           </td>
                         ) : null}
+                        {li === 0 ? (
+                          <td
+                            rowSpan={variant.inventoryLevels.length}
+                            className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300 align-top"
+                          >
+                            {product.manufacturer ?? ""}
+                          </td>
+                        ) : null}
+                        {li === 0 ? (
+                          <td
+                            rowSpan={variant.inventoryLevels.length}
+                            className="px-4 py-3 text-sm text-right tabular-nums text-gray-900 dark:text-gray-100 align-top"
+                          >
+                            {variant.reorderPoint?.toLocaleString() ?? ""}
+                          </td>
+                        ) : null}
                         <td className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
                           {level.location}
                         </td>
@@ -124,9 +165,6 @@ export default function InventoryReport() {
                         </td>
                         <td className="px-4 py-3 text-sm text-right tabular-nums text-gray-900 dark:text-gray-100">
                           {level.committed.toLocaleString()}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-right tabular-nums text-gray-900 dark:text-gray-100">
-                          {level.incoming.toLocaleString()}
                         </td>
                       </tr>
                     ))
