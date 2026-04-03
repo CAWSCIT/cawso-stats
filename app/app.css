@@ -13,3 +13,19 @@ body {
     color-scheme: dark;
   }
 }
+
+@media print {
+  * {
+    font-size: 12px !important;
+    color: black !important;
+    background: transparent !important;
+  }
+
+  h1 {
+    font-size: 16px !important;
+  }
+
+  h2 {
+    font-size: 16px !important;
+  }
+}
