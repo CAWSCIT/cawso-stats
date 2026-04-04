@@ -1,5 +1,5 @@
 import type { Route } from "./+types/inventory-report";
-import responseData from "../data/response.json";
+import bulkResponseRaw from "../data/bulk-response.jsonl?raw";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -28,51 +28,72 @@ interface ProductGroup {
   variants: VariantData[];
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseInventoryData(): ProductGroup[] {
-  const products = responseData.data.products.nodes;
+  const lines: any[] = bulkResponseRaw
+    .trim()
+    .split("\n")
+    .map((line: string) => JSON.parse(line));
 
-  return products.map((product) => {
-    const manufacturerMetafield = product.metafields.nodes.find(
-      (mf) => mf.reference?.fields?.some(
-        (f: { key: string; value: string }) => f.key === "name"
-      )
-    );
-    const manufacturer = manufacturerMetafield?.reference?.fields?.find(
-      (f: { key: string; value: string }) => f.key === "name"
-    )?.value ?? null;
+  const products: Map<string, ProductGroup> = new Map();
+  const variants: Map<string, VariantData> = new Map();
+  const variantToProduct: Map<string, string> = new Map();
 
-    return {
-      title: product.title,
-      manufacturer,
-      variants: product.variants.nodes.map((variant) => {
-      const reorderMetafield = variant.metafields?.nodes?.find(
-        (mf: { key: string }) => mf.key === "custom.reorder_point"
-      );
-      const reorderPoint = reorderMetafield ? Number(reorderMetafield.value) : null;
+  for (const record of lines) {
+    const id: string | undefined = record.id;
+    const parentId: string | undefined = record.__parentId;
 
-      return {
-      title: variant.title,
-      sku: variant.sku,
-      reorderPoint,
-      inventoryLevels: variant.inventoryItem.inventoryLevels.nodes.map((level) => {
-        const quantities = level.quantities.reduce(
+    if (id?.includes("/Product/") && !parentId) {
+      // Product record
+      products.set(id, {
+        title: record.title,
+        manufacturer: null,
+        variants: [],
+      });
+    } else if (id?.includes("/ProductVariant/") && parentId) {
+      // Variant record
+      const variant: VariantData = {
+        title: record.title,
+        sku: record.sku,
+        reorderPoint: null,
+        inventoryLevels: [],
+      };
+      variants.set(id, variant);
+      variantToProduct.set(id, parentId);
+      products.get(parentId)?.variants.push(variant);
+    } else if (record.key === "custom.associated_manufacturer" && parentId) {
+      // Manufacturer metafield on a product
+      const name = record.reference?.fields?.find(
+        (f: { key: string }) => f.key === "name"
+      )?.value ?? null;
+      const product = products.get(parentId);
+      if (product) product.manufacturer = name;
+    } else if (record.key === "custom.reorder_point" && parentId) {
+      // Reorder point metafield on a variant
+      const variant = variants.get(parentId);
+      if (variant) variant.reorderPoint = Number(record.value);
+    } else if (record.location && parentId) {
+      // Inventory level on a variant
+      const variant = variants.get(parentId);
+      if (variant) {
+        const quantities = record.quantities.reduce(
           (acc: Record<string, number>, q: { name: string; quantity: number }) => {
             acc[q.name] = q.quantity;
             return acc;
           },
           {} as Record<string, number>
         );
-        return {
-          location: level.location.name,
+        variant.inventoryLevels.push({
+          location: record.location.name,
           available: quantities.available ?? 0,
           onHand: quantities.on_hand ?? 0,
           committed: quantities.committed ?? 0,
-        };
-      }),
-    };
-    }),
-  };
-  });
+        });
+      }
+    }
+  }
+
+  return Array.from(products.values());
 }
 
 function escapeCsvValue(value: string | number | null): string {
