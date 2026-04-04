@@ -1,5 +1,5 @@
+import { useState, useEffect } from "react";
 import type { Route } from "./+types/inventory-report";
-import bulkResponseRaw from "../data/bulk-response.jsonl?raw";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -28,30 +28,30 @@ interface ProductGroup {
   variants: VariantData[];
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseInventoryData(): ProductGroup[] {
-  const lines: any[] = bulkResponseRaw
+const BULK_RESPONSE_URL =
+  "https://storage.googleapis.com/shopify-tiers-assets-prod-us-east1/bulk-operation-outputs/d2k9ijkxiaoj6bmey2p47bygrqwv-final?GoogleAccessId=assets-us-prod%40shopify-tiers.iam.gserviceaccount.com&Expires=1775873296&Signature=D9Urh1QyPfw8ZYwo9oeEDteCH4ocdDiaNPVkr%2Fi%2FkgK4iQI6uHkVz6r%2FuQ1%2FP6o%2FCzH58rUHo6OP4HRm5OIEP5FmuB84M%2F%2FpZaWAYkEVro90DHOIWjFJtTCLSEED897AGUacDHX%2Bz9FUr1mxfY2E8zN6rV%2B1WdbZVBLWCtcjBDzCBZBHerN77dIY5cxPCOPweEY039LMcIul50zbpwLbfDTANCCUzVKFh2NyD6m2AlIX%2BXfY3a5la54yd2tXQh5wwab9mAXO5o0WbipoFuu3rl15BiVOaQUvC0jNIXY1%2Fhk37ugtyfqRzkG6t%2BystxLl0YTnhyGVq8n7APTlTNBQZw%3D%3D&response-content-disposition=attachment%3B+filename%3D%22bulk-6865694851305.jsonl%22%3B+filename%2A%3DUTF-8%27%27bulk-6865694851305.jsonl&response-content-type=application%2Fjsonl";
+
+function parseBulkResponse(raw: string): ProductGroup[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lines: any[] = raw
     .trim()
     .split("\n")
     .map((line: string) => JSON.parse(line));
 
   const products: Map<string, ProductGroup> = new Map();
   const variants: Map<string, VariantData> = new Map();
-  const variantToProduct: Map<string, string> = new Map();
 
   for (const record of lines) {
     const id: string | undefined = record.id;
     const parentId: string | undefined = record.__parentId;
 
     if (id?.includes("/Product/") && !parentId) {
-      // Product record
       products.set(id, {
         title: record.title,
         manufacturer: null,
         variants: [],
       });
     } else if (id?.includes("/ProductVariant/") && parentId) {
-      // Variant record
       const variant: VariantData = {
         title: record.title,
         sku: record.sku,
@@ -59,21 +59,17 @@ function parseInventoryData(): ProductGroup[] {
         inventoryLevels: [],
       };
       variants.set(id, variant);
-      variantToProduct.set(id, parentId);
       products.get(parentId)?.variants.push(variant);
     } else if (record.key === "custom.associated_manufacturer" && parentId) {
-      // Manufacturer metafield on a product
       const name = record.reference?.fields?.find(
         (f: { key: string }) => f.key === "name"
       )?.value ?? null;
       const product = products.get(parentId);
       if (product) product.manufacturer = name;
     } else if (record.key === "custom.reorder_point" && parentId) {
-      // Reorder point metafield on a variant
       const variant = variants.get(parentId);
       if (variant) variant.reorderPoint = Number(record.value);
     } else if (record.location && parentId) {
-      // Inventory level on a variant
       const variant = variants.get(parentId);
       if (variant) {
         const quantities = record.quantities.reduce(
@@ -94,6 +90,22 @@ function parseInventoryData(): ProductGroup[] {
   }
 
   return Array.from(products.values());
+}
+
+function useInventoryData() {
+  const [productGroups, setProductGroups] = useState<ProductGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(BULK_RESPONSE_URL)
+      .then((res) => res.text())
+      .then((raw) => {
+        setProductGroups(parseBulkResponse(raw));
+        setLoading(false);
+      });
+  }, []);
+
+  return { productGroups, loading };
 }
 
 function escapeCsvValue(value: string | number | null): string {
@@ -144,7 +156,7 @@ function downloadCsv(productGroups: ProductGroup[]) {
 }
 
 export default function InventoryReport() {
-  const productGroups = parseInventoryData();
+  const { productGroups, loading } = useInventoryData();
   const columnHeaders = ["Variant", "SKU", "Pref. Vendor", "Location", "Available", "On Hand", "Reorder Point", "On Sales Order"];
   const printColWidths = ["15%", "12%", "12%", "16%", "10%", "10%", "12%", "13%"];
 
@@ -155,6 +167,14 @@ export default function InventoryReport() {
       ))}
     </colgroup>
   );
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-white dark:bg-gray-950 p-8 flex items-center justify-center">
+        <p className="text-gray-500 dark:text-gray-400">Loading inventory data...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-950 p-8 print:p-0 print:ml-1.5">
