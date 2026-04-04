@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router";
 import type { Route } from "./+types/inventory-report";
 
 export function meta({}: Route.MetaArgs) {
@@ -179,9 +180,17 @@ export default function InventoryReport() {
   return (
     <div className="min-h-screen bg-white dark:bg-gray-950 p-8 print:p-0 print:ml-1.5">
       <div className="flex items-center justify-between mb-6 print:mb-2">
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white print:text-base">
-          Inventory Report
-        </h1>
+        <div className="flex items-center gap-4">
+          <Link
+            to="/"
+            className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors print:hidden"
+          >
+            &larr; Back
+          </Link>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white print:text-base">
+            Inventory Report
+          </h1>
+        </div>
         <button
           onClick={() => downloadCsv(productGroups)}
           className="px-4 py-2 text-sm font-medium text-white bg-gray-800 rounded-lg hover:bg-gray-700 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors print:hidden"
