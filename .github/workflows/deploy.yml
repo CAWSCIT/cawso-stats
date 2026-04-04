@@ -37,13 +37,13 @@ jobs:
         run: npm run build
 
       - name: List build output
-        run: ls -lhR dist
+        run: ls -lhR build/client
 
       - name: Check index.html
-        run: test -f dist/index.html && echo "index.html exists" || (echo "index.html missing!" && exit 1)
+        run: test -f build/client/index.html && echo "index.html exists" || (echo "index.html missing!" && exit 1)
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
+          publish_dir: ./build/client
