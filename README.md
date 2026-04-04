@@ -1,87 +1,53 @@
-# Welcome to React Router!
+# CAWSO Stats
 
-A modern, production-ready template for building full-stack React applications using React Router.
+Internal Shopify inventory dashboard for CAWSO. Built with React Router and Tailwind CSS, designed to run as an embedded Shopify app.
 
-[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/remix-run/react-router-templates/tree/main/default)
+## What it does
 
-## Features
+- Authenticates with Shopify via a Cloudflare Worker token exchange (see `cloudflare/`)
+- Fetches bulk inventory data (JSONL) from Shopify's bulk operation API
+- Displays all products, variants, and inventory levels in a grouped table
+- Highlights variants where available stock is below their reorder point
+- Supports CSV export of the full inventory report
+- Print-optimized layout for physical reports
 
-- 🚀 Server-side rendering
-- ⚡️ Hot Module Replacement (HMR)
-- 📦 Asset bundling and optimization
-- 🔄 Data loading and mutations
-- 🔒 TypeScript by default
-- 🎉 TailwindCSS for styling
-- 📖 [React Router docs](https://reactrouter.com/)
-
-## Getting Started
-
-### Installation
-
-Install the dependencies:
+## Getting started
 
 ```bash
 npm install
-```
-
-### Development
-
-Start the development server with HMR:
-
-```bash
 npm run dev
 ```
 
-Your application will be available at `http://localhost:5173`.
+App runs at `http://localhost:5173`.
 
-## Building for Production
+### Local testing (without Shopify embed)
 
-Create a production build:
+Add `access_token` and `shop` as URL params to skip the Cloudflare auth flow:
+
+```
+http://localhost:5173/?access_token=shpat_xxxxx&shop=your-store.myshopify.com
+```
+
+### Embedded in Shopify
+
+When loaded inside Shopify Admin, the app reads the URL params (`id_token`, `shop`, etc.), POSTs them to the Cloudflare Worker, and receives an access token back.
+
+## Project structure
+
+```
+app/
+  root.tsx              # App shell, wraps routes in ShopProvider
+  shop-context.tsx      # Global auth context (shop + access_token)
+  routes/
+    home.tsx            # Welcome page with auth status and navigation
+    inventory-report.tsx # Inventory table, CSV download
+  data/                 # Local data files (dev/testing)
+cloudflare/
+  worker.js            # Cloudflare Worker for Shopify token exchange
+```
+
+## Build
 
 ```bash
 npm run build
 ```
-
-## Deployment
-
-### Docker Deployment
-
-To build and run using Docker:
-
-```bash
-docker build -t my-app .
-
-# Run the container
-docker run -p 3000:3000 my-app
-```
-
-The containerized application can be deployed to any platform that supports Docker, including:
-
-- AWS ECS
-- Google Cloud Run
-- Azure Container Apps
-- Digital Ocean App Platform
-- Fly.io
-- Railway
-
-### DIY Deployment
-
-If you're familiar with deploying Node applications, the built-in app server is production-ready.
-
-Make sure to deploy the output of `npm run build`
-
-```
-├── package.json
-├── package-lock.json (or pnpm-lock.yaml, or bun.lockb)
-├── build/
-│   ├── client/    # Static assets
-│   └── server/    # Server-side code
-```
-
-## Styling
-
-This template comes with [Tailwind CSS](https://tailwindcss.com/) already configured for a simple default starting experience. You can use whatever CSS framework you prefer.
-
----
-
-Built with ❤️ using React Router.
