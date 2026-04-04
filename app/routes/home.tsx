@@ -18,7 +18,7 @@ export default function Home() {
         CAWSO Stats
       </h1>
       <p className="text-gray-600 dark:text-gray-400 mb-8">
-        Welcome to the CAWSO Shopify inventory dashboard.
+        Welcome to the CAWSO Shopify inventory dashboard. Let the DAL know if you need custom reports that can't be generated via Shopify's reports or other apps.
       </p>
 
       {loading && (
