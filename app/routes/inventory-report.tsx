@@ -437,22 +437,22 @@ export default function InventoryReport() {
         {productGroups.map((product) => (
           <div
             key={product.title}
-            className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden print:rounded-none print:border-0"
+            className="rounded-lg border border-gray-200 dark:border-gray-700 print:rounded-none print:border-0"
           >
-            <div className="bg-gray-100 dark:bg-gray-800 px-4 py-3 flex items-baseline gap-3 print:bg-transparent print:px-1 print:py-1">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white print:text-base print:font-bold">
-                {product.title}
-              </h2>
-              {product.manufacturer && (
-                <span className="text-sm text-gray-500 dark:text-gray-400 print:hidden">
-                  Manufacturer: {product.manufacturer}
-                </span>
-              )}
-            </div>
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 print:divide-y-0 print:table-fixed">
+            <div className="sticky top-0 z-10">
+              <div className="bg-gray-100 dark:bg-gray-800 px-4 py-3 flex items-baseline gap-3 print:bg-transparent print:px-1 print:py-1 rounded-t-lg border-b border-gray-200 dark:border-gray-700 print:rounded-none print:border-0">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white print:text-base print:font-bold">
+                  {product.title}
+                </h2>
+                {product.manufacturer && (
+                  <span className="text-sm text-gray-500 dark:text-gray-400 print:hidden">
+                    Manufacturer: {product.manufacturer}
+                  </span>
+                )}
+              </div>
+              <table className="min-w-full print:hidden">
                 <PrintColGroup />
-                <thead className="bg-gray-50 dark:bg-gray-800/50 print:hidden">
+                <thead className="bg-gray-50 dark:bg-gray-800/50">
                   <tr>
                     {columnHeaders.map(
                       (header) => (
@@ -462,6 +462,20 @@ export default function InventoryReport() {
                         >
                           {header}
                         </th>
+                      )
+                    )}
+                  </tr>
+                </thead>
+              </table>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 print:divide-y-0 print:table-fixed">
+                <PrintColGroup />
+                <thead className="bg-gray-50 dark:bg-gray-800/50 print:hidden">
+                  <tr className="sr-only">
+                    {columnHeaders.map(
+                      (header) => (
+                        <th key={header}>{header}</th>
                       )
                     )}
                   </tr>
