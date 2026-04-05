@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useRef, useCallback } from "react";
 import { Link } from "react-router";
 import type { Route } from "./+types/inventory-report";
+import { useShopSession } from "../shop-context";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -29,8 +30,104 @@ interface ProductGroup {
   variants: VariantData[];
 }
 
-const BULK_RESPONSE_URL =
-  "https://storage.googleapis.com/shopify-tiers-assets-prod-us-east1/bulk-operation-outputs/d2k9ijkxiaoj6bmey2p47bygrqwv-final?GoogleAccessId=assets-us-prod%40shopify-tiers.iam.gserviceaccount.com&Expires=1775873296&Signature=D9Urh1QyPfw8ZYwo9oeEDteCH4ocdDiaNPVkr%2Fi%2FkgK4iQI6uHkVz6r%2FuQ1%2FP6o%2FCzH58rUHo6OP4HRm5OIEP5FmuB84M%2F%2FpZaWAYkEVro90DHOIWjFJtTCLSEED897AGUacDHX%2Bz9FUr1mxfY2E8zN6rV%2B1WdbZVBLWCtcjBDzCBZBHerN77dIY5cxPCOPweEY039LMcIul50zbpwLbfDTANCCUzVKFh2NyD6m2AlIX%2BXfY3a5la54yd2tXQh5wwab9mAXO5o0WbipoFuu3rl15BiVOaQUvC0jNIXY1%2Fhk37ugtyfqRzkG6t%2BystxLl0YTnhyGVq8n7APTlTNBQZw%3D%3D&response-content-disposition=attachment%3B+filename%3D%22bulk-6865694851305.jsonl%22%3B+filename%2A%3DUTF-8%27%27bulk-6865694851305.jsonl&response-content-type=application%2Fjsonl";
+const BULK_OPERATION_MUTATION = `mutation {
+  bulkOperationRunQuery(
+    query: """
+    {
+      products {
+        edges {
+          node {
+            id
+            title
+            metafields(first: 1, keys: ["custom.associated_manufacturer"]) {
+              edges {
+                node {
+                  key
+                  value
+                  reference {
+                    ... on Metaobject {
+                      fields {
+                        key
+                        value
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            variants {
+              edges {
+                node {
+                  id
+                  title
+                  sku
+                  metafields(first: 1, keys: ["custom.reorder_point"]) {
+                    edges {
+                      node {
+                        key
+                        value
+                      }
+                    }
+                  }
+                  inventoryItem {
+                    id
+                    tracked
+                    inventoryLevels {
+                      edges {
+                        node {
+                          location {
+                            name
+                          }
+                          quantities(names: ["available", "on_hand", "committed"]) {
+                            name
+                            quantity
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+  ) {
+    bulkOperation {
+      id
+      status
+    }
+    userErrors {
+      field
+      message
+    }
+  }
+}`;
+
+const POLL_QUERY = `query {
+  currentBulkOperation {
+    id
+    status
+    url
+  }
+}`;
+
+const GRAPHQL_PROXY = "https://throbbing-frog-a6d8.kalob-taulien.workers.dev/graphql";
+
+async function shopifyGraphQL(shop: string, accessToken: string, query: string) {
+  const res = await fetch(GRAPHQL_PROXY, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shop, access_token: accessToken, query }),
+  });
+  return res.json();
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function parseBulkResponse(raw: string): ProductGroup[] {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -94,19 +191,89 @@ function parseBulkResponse(raw: string): ProductGroup[] {
 }
 
 function useInventoryData() {
+  const { session } = useShopSession();
   const [productGroups, setProductGroups] = useState<ProductGroup[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef(false);
 
-  useEffect(() => {
-    fetch(BULK_RESPONSE_URL)
-      .then((res) => res.text())
-      .then((raw) => {
-        setProductGroups(parseBulkResponse(raw));
-        setLoading(false);
-      });
-  }, []);
+  const loadInventory = useCallback(async () => {
+    if (!session) return;
+    abortRef.current = false;
+    setLoading(true);
+    setError(null);
 
-  return { productGroups, loading };
+    try {
+      // Step 1: Start bulk operation
+      setStatus("Starting bulk operation...");
+      const mutationRes = await shopifyGraphQL(
+        session.shop,
+        session.accessToken,
+        BULK_OPERATION_MUTATION
+      );
+
+      const bulkOp = mutationRes.data?.bulkOperationRunQuery?.bulkOperation;
+      const userErrors = mutationRes.data?.bulkOperationRunQuery?.userErrors;
+
+      if (userErrors?.length) {
+        throw new Error(userErrors.map((e: { message: string }) => e.message).join(", "));
+      }
+      if (!bulkOp?.id) {
+        throw new Error("Failed to start bulk operation");
+      }
+
+      // Step 2: Poll for completion
+      const bulkOperationId = bulkOp.id;
+      setStatus("Waiting for Shopify to process bulk data...");
+
+      let jsonlUrl: string | null = null;
+      while (!abortRef.current) {
+        await delay(15000);
+
+        const pollRes = await shopifyGraphQL(
+          session.shop,
+          session.accessToken,
+          POLL_QUERY
+        );
+
+        const op = pollRes.data?.currentBulkOperation;
+        if (!op) {
+          setStatus("Waiting for Shopify to process bulk data... (polling again in 15s)");
+          continue;
+        }
+
+        if (op.status === "COMPLETED") {
+          jsonlUrl = op.url;
+          break;
+        } else if (op.status === "FAILED" || op.status === "CANCELED") {
+          throw new Error(`Bulk operation ${op.status.toLowerCase()}`);
+        }
+
+        setStatus(`Waiting for Shopify to process bulk data... (status: ${op.status})`);
+      }
+
+      if (!jsonlUrl) {
+        throw new Error("Bulk operation completed but no URL returned");
+      }
+
+      // Step 3: Fetch and parse the JSONL
+      setStatus("Downloading inventory data...");
+      const jsonlRes = await fetch(jsonlUrl);
+      const raw = await jsonlRes.text();
+
+      setProductGroups(parseBulkResponse(raw));
+      setLoaded(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+      setStatus("");
+    }
+  }, [session]);
+
+  return { productGroups, loading, loaded, status, error, loadInventory };
 }
 
 function escapeCsvValue(value: string | number | null): string {
@@ -159,7 +326,7 @@ function downloadCsv(productGroups: ProductGroup[]) {
 }
 
 export default function InventoryReport() {
-  const { productGroups, loading } = useInventoryData();
+  const { productGroups, loading, loaded, status, error, loadInventory } = useInventoryData();
   const columnHeaders = ["Variant", "SKU", "Pref. Vendor", "Location", "Available", "On Hand", "Reorder Point", "On Sales Order"];
   const printColWidths = ["15%", "12%", "12%", "16%", "10%", "10%", "12%", "13%"];
 
@@ -171,10 +338,53 @@ export default function InventoryReport() {
     </colgroup>
   );
 
+  if (!loaded && !loading) {
+    return (
+      <div className="min-h-screen bg-white dark:bg-gray-950 p-8">
+        <div className="flex items-center gap-4 mb-6">
+          <Link
+            to="/"
+            className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
+          >
+            &larr; Back
+          </Link>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+            Inventory Report
+          </h1>
+        </div>
+        {error && (
+          <div className="rounded-lg border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20 p-4 mb-4">
+            <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
+          </div>
+        )}
+        <button
+          onClick={loadInventory}
+          className="px-4 py-2 text-sm font-medium text-white bg-gray-800 rounded-lg hover:bg-gray-700 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors"
+        >
+          Load Inventory Report
+        </button>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-white dark:bg-gray-950 p-8 flex items-center justify-center">
-        <p className="text-gray-500 dark:text-gray-400">Loading inventory data...</p>
+      <div className="min-h-screen bg-white dark:bg-gray-950 p-8">
+        <div className="flex items-center gap-4 mb-6">
+          <Link
+            to="/"
+            className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
+          >
+            &larr; Back
+          </Link>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+            Inventory Report
+          </h1>
+        </div>
+        <p className="text-gray-500 dark:text-gray-400">Loading entire inventory... this may take a minute or two.</p>
+        {status && (
+          <p className="text-sm text-gray-400 dark:text-gray-500 mt-2">{status}</p>
+        )}
       </div>
     );
   }
