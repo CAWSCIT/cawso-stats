@@ -1,14 +1,9 @@
-# Cloudflare Worker - Shopify Token Exchange
+# Cloudflare Worker - Shopify Auth & GraphQL Proxy
 
-This worker acts as a proxy between the embedded app and Shopify's OAuth token exchange endpoint. It exists so the Shopify client secret never touches the browser.
+This worker sits between the frontend app and Shopify. It handles two things:
 
-## How it works
-
-1. The embedded app sends a POST request with the Shopify URL params (including `id_token` and `shop`)
-2. The worker extracts `id_token` and `shop` from the JSON body
-3. It performs a token exchange with Shopify's `/admin/oauth/access_token` endpoint using the stored `SHOPIFY_CLIENT_ID` and `SHOPIFY_CLIENT_SECRET`
-4. On success, it returns `{ shop, access_token }` to the frontend
-5. On failure, it returns an error object
+1. **`/auth`** - Exchanges a Shopify `id_token` for an `access_token` (keeps the client secret out of the browser)
+2. **`/graphql`** - Proxies GraphQL requests to the Shopify Admin API (attaches the access token server-side)
 
 ## Environment variables
 
@@ -17,40 +12,113 @@ These must be configured as secrets in the Cloudflare Worker:
 - `SHOPIFY_CLIENT_ID` - The Shopify app's client ID
 - `SHOPIFY_CLIENT_SECRET` - The Shopify app's client secret
 
-## Endpoint
+## Endpoints
 
-**POST** `/`
+### POST `/auth`
 
-### Request
+Exchanges a Shopify `id_token` for an online access token.
 
-```json
-{
-  "id_token": "eyJhbGci...",
-  "shop": "your-store.myshopify.com"
-}
+**Request body:**
+
+| Field      | Required | Description                          |
+|------------|----------|--------------------------------------|
+| `id_token` | Yes      | The JWT from Shopify's embed URL     |
+| `shop`     | Yes      | The `.myshopify.com` domain          |
+
+**JavaScript example:**
+
+```js
+const res = await fetch('https://throbbing-frog-a6d8.kalob-taulien.workers.dev/auth', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    id_token: 'eyJhbGci...',
+    shop: 'your-store.myshopify.com',
+  }),
+});
+const data = await res.json();
+// Success: { shop: "your-store.myshopify.com", access_token: "shpat_xxxx" }
+// Failure: { error: "Token exchange failed", details: { ... } }
 ```
 
-### Success response
+### POST `/graphql`
 
-```json
-{
-  "shop": "your-store.myshopify.com",
-  "access_token": "shpat_xxxx"
-}
+Proxies a GraphQL query to the Shopify Admin API (`/admin/api/2025-01/graphql.json`).
+
+**Request body:**
+
+| Field          | Required | Description                                |
+|----------------|----------|--------------------------------------------|
+| `shop`         | Yes      | The `.myshopify.com` domain                |
+| `access_token` | Yes      | The Shopify access token from `/auth`      |
+| `query`        | Yes      | The GraphQL query or mutation string       |
+
+**JavaScript example - start a bulk operation:**
+
+```js
+const res = await fetch('https://throbbing-frog-a6d8.kalob-taulien.workers.dev/graphql', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    shop: 'your-store.myshopify.com',
+    access_token: 'shpat_xxxx',
+    query: `mutation {
+      bulkOperationRunQuery(
+        query: """
+        {
+          products {
+            edges {
+              node {
+                id
+                title
+              }
+            }
+          }
+        }
+        """
+      ) {
+        bulkOperation {
+          id
+          status
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }`,
+  }),
+});
+const data = await res.json();
+// data.data.bulkOperationRunQuery.bulkOperation.id
 ```
 
-### Error response
+**JavaScript example - poll for bulk operation status:**
 
-```json
-{
-  "error": "Token exchange failed",
-  "details": { ... }
-}
+```js
+const res = await fetch('https://throbbing-frog-a6d8.kalob-taulien.workers.dev/graphql', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    shop: 'your-store.myshopify.com',
+    access_token: 'shpat_xxxx',
+    query: `query {
+      currentBulkOperation {
+        id
+        status
+        url
+      }
+    }`,
+  }),
+});
+const data = await res.json();
+// When done: data.data.currentBulkOperation.status === "COMPLETED"
+// The .url field contains the JSONL download link
 ```
 
 ## CORS
 
-The worker allows all origins (`*`) for CORS, and handles `OPTIONS` preflight requests.
+The worker allows all origins (`*`) and handles `OPTIONS` preflight requests.
 
 ## Deployment
 
