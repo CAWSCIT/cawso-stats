@@ -224,13 +224,19 @@ function useInventoryData() {
         throw new Error("Failed to start bulk operation");
       }
 
-      // Step 2: Poll for completion
+      // Step 2: Poll for completion with progressive backoff (5s, 10s, 15s, 20s, 20s, ...)
       const bulkOperationId = bulkOp.id;
-      setStatus("Waiting for Shopify to process bulk data...");
+      let pollWait = 5000;
+      const MAX_POLL_WAIT = 20000;
 
       let jsonlUrl: string | null = null;
+      let pollAttempt = 0;
       while (!abortRef.current) {
-        await delay(15000);
+        pollAttempt++;
+        const waitSeconds = pollWait / 1000;
+        setStatus(`Still processing... checking again in ${waitSeconds}s (attempt ${pollAttempt})`);
+        await delay(pollWait);
+        pollWait = Math.min(pollWait + 5000, MAX_POLL_WAIT);
 
         const pollRes = await shopifyGraphQL(
           session.shop,
@@ -240,7 +246,6 @@ function useInventoryData() {
 
         const op = pollRes.data?.currentBulkOperation;
         if (!op) {
-          setStatus("Waiting for Shopify to process bulk data... (polling again in 15s)");
           continue;
         }
 
@@ -250,8 +255,6 @@ function useInventoryData() {
         } else if (op.status === "FAILED" || op.status === "CANCELED") {
           throw new Error(`Bulk operation ${op.status.toLowerCase()}`);
         }
-
-        setStatus(`Waiting for Shopify to process bulk data... (status: ${op.status})`);
       }
 
       if (!jsonlUrl) {
@@ -464,11 +467,15 @@ export default function InventoryReport() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200 dark:divide-gray-700 print:divide-y-0">
-                  {product.variants.map((variant) =>
-                    variant.inventoryLevels.map((level, li) => {
-                      const belowReorder =
-                        variant.reorderPoint !== null &&
-                        level.available < variant.reorderPoint;
+                  {product.variants.map((variant) => {
+                    const usShopLevel = variant.inventoryLevels.find(
+                      (l) => l.location === "US Shop"
+                    );
+                    const belowReorder =
+                      variant.reorderPoint !== null &&
+                      usShopLevel !== undefined &&
+                      usShopLevel.available < variant.reorderPoint;
+                    return variant.inventoryLevels.map((level, li) => {
                       return (
                       <tr
                         key={`${variant.sku}-${level.location}`}
@@ -524,8 +531,8 @@ export default function InventoryReport() {
                         </td>
                       </tr>
                       );
-                    })
-                  )}
+                    });
+                  })}
                 </tbody>
               </table>
             </div>
