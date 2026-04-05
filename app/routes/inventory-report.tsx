@@ -119,7 +119,9 @@ function escapeCsvValue(value: string | number | null): string {
 }
 
 function generateCsv(productGroups: ProductGroup[]): string {
-  const rows: string[] = [];
+  const rows: string[] = [
+    ["Product", "Variant", "SKU", "Pref. Vendor", "Location", "Available", "On Hand", "Reorder Point", "On Sales Order"].join(","),
+  ];
 
   for (const product of productGroups) {
     for (const variant of product.variants) {
