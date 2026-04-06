@@ -80,7 +80,7 @@ export default {
         }
 
         const shopifyRes = await fetch(
-          `https://${shop}/admin/api/2025-01/graphql.json`,
+          `https://${shop}/admin/api/2026-04/graphql.json`,
           {
             method: 'POST',
             headers: {
