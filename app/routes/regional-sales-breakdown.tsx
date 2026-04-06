@@ -1,5 +1,8 @@
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { Link } from "react-router";
+import L from "leaflet";
+import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
 import type { Route } from "./+types/regional-sales-breakdown";
 import { useShopSession } from "../shop-context";
 
@@ -527,6 +530,65 @@ function buildRegionSummaries(orders: OrderLine[]): RegionSummary[] {
   return summaries;
 }
 
+function OrderMap({ orders }: { orders: OrderLine[] }) {
+  const mapRef = useRef<L.Map | null>(null);
+  const geoOrders = useMemo(
+    () => orders.filter((o) => o.latitude != null && o.longitude != null),
+    [orders]
+  );
+
+  useEffect(() => {
+    if (!mapRef.current || geoOrders.length === 0) return;
+    const bounds = L.latLngBounds(
+      geoOrders.map((o) => [o.latitude!, o.longitude!])
+    );
+    mapRef.current.fitBounds(bounds, { padding: [30, 30] });
+  }, [geoOrders]);
+
+  if (geoOrders.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden mb-6">
+      <MapContainer
+        center={[39.8, -98.5]}
+        zoom={4}
+        style={{ height: 420 }}
+        ref={mapRef}
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        {geoOrders.map((order, i) => (
+          <CircleMarker
+            key={`${order.name}-${i}`}
+            center={[order.latitude!, order.longitude!]}
+            radius={5}
+            pathOptions={{
+              fillColor: "#2563eb",
+              fillOpacity: 0.7,
+              color: "#1e40af",
+              weight: 1,
+            }}
+          >
+            <Tooltip>
+              <span className="font-medium">{order.name}</span>
+              <br />
+              {formatCurrency(order.amount)}
+              {order.area && (
+                <>
+                  <br />
+                  {order.area}
+                </>
+              )}
+            </Tooltip>
+          </CircleMarker>
+        ))}
+      </MapContainer>
+    </div>
+  );
+}
+
 function OrderResults({ orders }: { orders: OrderLine[] }) {
   const summaries = useMemo(() => buildRegionSummaries(orders), [orders]);
   const grandTotal = orders.reduce((s, o) => s + o.amount, 0);
@@ -541,6 +603,8 @@ function OrderResults({ orders }: { orders: OrderLine[] }) {
           </span>
         </p>
       </div>
+
+      <OrderMap orders={orders} />
 
       {summaries.map((region) => (
         <div
