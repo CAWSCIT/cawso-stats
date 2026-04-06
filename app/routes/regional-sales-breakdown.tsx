@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { Link } from "react-router";
 import type { Route } from "./+types/regional-sales-breakdown";
 import { useShopSession } from "../shop-context";
@@ -58,8 +58,101 @@ function getAvailableQuarters(): QuarterOption[] {
   return options;
 }
 
+const AREAS_URL =
+  "https://raw.githubusercontent.com/CAWSCIT/area-maps/refs/heads/main/src/areas/Areas.json";
+
 const GRAPHQL_PROXY =
   "https://throbbing-frog-a6d8.kalob-taulien.workers.dev/graphql";
+
+interface OrderLine {
+  name: string;
+  amount: number;
+  currencyCode: string;
+  latitude: number | null;
+  longitude: number | null;
+  area: string | null;
+  region: string | null;
+}
+
+interface AreaFeature {
+  type: "Feature";
+  properties: { Name: string; Region: string; WSCRecognized: string };
+  geometry: { type: "Polygon"; coordinates: number[][][] };
+}
+
+interface AreasGeoJSON {
+  type: "FeatureCollection";
+  features: AreaFeature[];
+}
+
+function pointInPolygon(
+  lat: number,
+  lng: number,
+  polygon: number[][]
+): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][1]; // lat
+    const yi = polygon[i][0]; // lng
+    const xj = polygon[j][1];
+    const yj = polygon[j][0];
+
+    const intersect =
+      yi > lng !== yj > lng &&
+      lat < ((xj - xi) * (lng - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function matchOrderToArea(
+  lat: number,
+  lng: number,
+  features: AreaFeature[]
+): { area: string; region: string } | null {
+  for (const feature of features) {
+    const ring = feature.geometry.coordinates[0];
+    if (pointInPolygon(lat, lng, ring)) {
+      return {
+        area: feature.properties.Name,
+        region: feature.properties.Region,
+      };
+    }
+  }
+  return null;
+}
+
+function parseJSONL(text: string): OrderLine[] {
+  const lines = text.trim().split("\n");
+  const orders: OrderLine[] = [];
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const obj = JSON.parse(line);
+    // Skip child nodes (inventory levels etc. that have __parentId)
+    if (obj.__parentId) continue;
+
+    const amount = parseFloat(
+      obj.currentTotalPriceSet?.shopMoney?.amount ?? "0"
+    );
+    const currencyCode =
+      obj.currentTotalPriceSet?.shopMoney?.currencyCode ?? "USD";
+    const lat = obj.shippingAddress?.latitude ?? null;
+    const lng = obj.shippingAddress?.longitude ?? null;
+
+    orders.push({
+      name: obj.name ?? "",
+      amount,
+      currencyCode,
+      latitude: lat,
+      longitude: lng,
+      area: null,
+      region: null,
+    });
+  }
+
+  return orders;
+}
 
 function buildOrderFilter(option: QuarterOption): string {
   return `processed_at:>=${option.startDate} processed_at:<${option.endDate}`;
@@ -122,7 +215,8 @@ export default function RegionalSalesBreakdown() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [bulkOperationId, setBulkOperationId] = useState<string | null>(null);
+  const [orders, setOrders] = useState<OrderLine[] | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const quartersForYear = useMemo(
     () => quarters.filter((q) => q.year === selectedYear),
@@ -147,24 +241,38 @@ export default function RegionalSalesBreakdown() {
     }
   }
 
-  async function handleGetReport() {
-    if (!session || !selectedOption) return;
-    setLoading(true);
-    setError(null);
-    setStatus("Starting bulk operation...");
-
-    try {
-      const mutation = buildBulkMutation(orderFilter);
+  const shopifyGraphQL = useCallback(
+    async (query: string) => {
+      if (!session) throw new Error("No session");
       const res = await fetch(GRAPHQL_PROXY, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shop: session.shop,
           access_token: session.accessToken,
-          query: mutation,
+          query,
         }),
       });
-      const json = await res.json();
+      return res.json();
+    },
+    [session]
+  );
+
+  async function handleGetReport() {
+    if (!session || !selectedOption) return;
+    setLoading(true);
+    setError(null);
+    setOrders(null);
+    setStatus("Starting bulk operation...");
+
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+
+    try {
+      const mutation = buildBulkMutation(orderFilter);
+      const json = await shopifyGraphQL(mutation);
 
       const bulkOp = json.data?.bulkOperationRunQuery?.bulkOperation;
       const userErrors = json.data?.bulkOperationRunQuery?.userErrors;
@@ -178,10 +286,98 @@ export default function RegionalSalesBreakdown() {
         throw new Error("Failed to start bulk operation");
       }
 
-      setBulkOperationId(bulkOp.id);
-      setStatus(`Bulk operation started (${bulkOp.status}). ID: ${bulkOp.id}`);
+      setStatus(`Polling for completion...`);
+      pollForCompletion(bulkOp.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setStatus("");
+      setLoading(false);
+    }
+  }
 
-      // TODO: poll for completion and fetch JSONL results
+  function pollForCompletion(operationId: string) {
+    const pollQuery = `query { bulkOperation(id: "${operationId}") { id status url } }`;
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const json = await shopifyGraphQL(pollQuery);
+        const op = json.data?.bulkOperation;
+
+        if (!op) {
+          clearInterval(pollRef.current!);
+          pollRef.current = null;
+          setError("Failed to check bulk operation status");
+          setLoading(false);
+          return;
+        }
+
+        if (op.status === "COMPLETED") {
+          clearInterval(pollRef.current!);
+          pollRef.current = null;
+
+          if (!op.url) {
+            setStatus("Completed but no data returned (0 orders?)");
+            setLoading(false);
+            return;
+          }
+
+          setStatus("Fetching order data...");
+          await fetchAndCategorize(op.url);
+        } else if (op.status === "FAILED" || op.status === "CANCELED") {
+          clearInterval(pollRef.current!);
+          pollRef.current = null;
+          setError(`Bulk operation ${op.status.toLowerCase()}`);
+          setStatus("");
+          setLoading(false);
+        } else {
+          setStatus(`Polling... (${op.status})`);
+        }
+      } catch (err) {
+        clearInterval(pollRef.current!);
+        pollRef.current = null;
+        setError(err instanceof Error ? err.message : String(err));
+        setStatus("");
+        setLoading(false);
+      }
+    }, 3500);
+  }
+
+  async function fetchAndCategorize(jsonlUrl: string) {
+    try {
+      // Fetch JSONL and Areas.json in parallel
+      const [jsonlRes, areasRes] = await Promise.all([
+        fetch(jsonlUrl),
+        fetch(AREAS_URL),
+      ]);
+
+      const jsonlText = await jsonlRes.text();
+      const areasData: AreasGeoJSON = await areasRes.json();
+
+      setStatus("Matching orders to areas...");
+
+      const parsed = parseJSONL(jsonlText);
+
+      // Categorize each order
+      for (const order of parsed) {
+        if (order.latitude != null && order.longitude != null) {
+          const match = matchOrderToArea(
+            order.latitude,
+            order.longitude,
+            areasData.features
+          );
+          if (match) {
+            order.area = match.area;
+            order.region = match.region;
+          } else {
+            order.area = "Outside of an Area";
+            order.region = "Outside of an Area";
+          }
+        }
+        // null lat/lng: area and region stay null
+      }
+
+      setOrders(parsed);
+      setStatus(`Done. ${parsed.length} orders processed.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setStatus("");
@@ -258,11 +454,148 @@ export default function RegionalSalesBreakdown() {
         </p>
       )}
 
-      {selectedOption && (
+      {selectedOption && !orders && (
         <p className="text-xs text-gray-400 dark:text-gray-500 font-mono">
           {orderFilter}
         </p>
       )}
+
+      {orders && <OrderResults orders={orders} />}
+    </div>
+  );
+}
+
+function formatCurrency(value: number): string {
+  return value.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+  });
+}
+
+interface RegionSummary {
+  region: string;
+  areas: { area: string; orderCount: number; totalSales: number }[];
+  orderCount: number;
+  totalSales: number;
+}
+
+function buildRegionSummaries(orders: OrderLine[]): RegionSummary[] {
+  const regionMap = new Map<
+    string,
+    Map<string, { orderCount: number; totalSales: number }>
+  >();
+
+  for (const order of orders) {
+    const region = order.region ?? "No Shipping Address";
+    const area = order.area ?? "No Shipping Address";
+
+    if (!regionMap.has(region)) regionMap.set(region, new Map());
+    const areaMap = regionMap.get(region)!;
+
+    const existing = areaMap.get(area) ?? { orderCount: 0, totalSales: 0 };
+    existing.orderCount += 1;
+    existing.totalSales += order.amount;
+    areaMap.set(area, existing);
+  }
+
+  const summaries: RegionSummary[] = [];
+  for (const [region, areaMap] of regionMap) {
+    const areas = [...areaMap.entries()]
+      .map(([area, data]) => ({ area, ...data }))
+      .sort((a, b) => b.totalSales - a.totalSales);
+
+    summaries.push({
+      region,
+      areas,
+      orderCount: areas.reduce((s, a) => s + a.orderCount, 0),
+      totalSales: areas.reduce((s, a) => s + a.totalSales, 0),
+    });
+  }
+
+  // Sort: "Outside of an Area" and "No Shipping Address" at the end
+  summaries.sort((a, b) => {
+    const special = ["Outside of an Area", "No Shipping Address"];
+    const aSpecial = special.indexOf(a.region);
+    const bSpecial = special.indexOf(b.region);
+    if (aSpecial !== -1 && bSpecial !== -1) return aSpecial - bSpecial;
+    if (aSpecial !== -1) return 1;
+    if (bSpecial !== -1) return -1;
+    return b.totalSales - a.totalSales;
+  });
+
+  return summaries;
+}
+
+function OrderResults({ orders }: { orders: OrderLine[] }) {
+  const summaries = useMemo(() => buildRegionSummaries(orders), [orders]);
+  const grandTotal = orders.reduce((s, o) => s + o.amount, 0);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          {orders.length} orders &middot; Grand total:{" "}
+          <span className="font-semibold text-gray-900 dark:text-white">
+            {formatCurrency(grandTotal)}
+          </span>
+        </p>
+      </div>
+
+      {summaries.map((region) => (
+        <div
+          key={region.region}
+          className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden"
+        >
+          <div className="bg-gray-50 dark:bg-gray-800/50 px-4 py-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
+              {region.region}
+            </h2>
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              {region.orderCount} orders &middot;{" "}
+              {formatCurrency(region.totalSales)}
+            </span>
+          </div>
+          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700" style={{ tableLayout: "fixed" }}>
+            <colgroup>
+              <col />
+              <col style={{ width: "10rem" }} />
+              <col style={{ width: "8rem" }} />
+            </colgroup>
+            <thead>
+              <tr className="bg-gray-50/50 dark:bg-gray-800/25">
+                <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">
+                  Area
+                </th>
+                <th className="px-4 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">
+                  Orders
+                </th>
+                <th className="px-4 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">
+                  Total Sales
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+              {region.areas.map((area) => (
+                <tr
+                  key={area.area}
+                  className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+                >
+                  <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100">
+                    {area.area}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-right tabular-nums text-gray-900 dark:text-gray-100">
+                    {area.orderCount}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-right tabular-nums text-gray-900 dark:text-gray-100">
+                    {formatCurrency(area.totalSales)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
     </div>
   );
 }
