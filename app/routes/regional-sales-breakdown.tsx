@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { Link } from "react-router";
 import type { Route } from "./+types/regional-sales-breakdown";
+import { useShopSession } from "../shop-context";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -57,11 +58,55 @@ function getAvailableQuarters(): QuarterOption[] {
   return options;
 }
 
-function buildQuery(option: QuarterOption): string {
+const GRAPHQL_PROXY =
+  "https://throbbing-frog-a6d8.kalob-taulien.workers.dev/graphql";
+
+function buildOrderFilter(option: QuarterOption): string {
   return `processed_at:>=${option.startDate} processed_at:<${option.endDate}`;
 }
 
+function buildBulkMutation(orderFilter: string): string {
+  return `mutation RunOrdersForGeoClustering {
+  bulkOperationRunQuery(
+    query: """
+    {
+      orders(
+        query: "${orderFilter}"
+        sortKey: PROCESSED_AT
+      ) {
+        edges {
+          node {
+            name
+            currentTotalPriceSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            shippingAddress {
+              latitude
+              longitude
+            }
+          }
+        }
+      }
+    }
+    """
+  ) {
+    bulkOperation {
+      id
+      status
+    }
+    userErrors {
+      field
+      message
+    }
+  }
+}`;
+}
+
 export default function RegionalSalesBreakdown() {
+  const { session } = useShopSession();
   const quarters = useMemo(() => getAvailableQuarters(), []);
   const availableYears = useMemo(
     () => [...new Set(quarters.map((q) => q.year))],
@@ -74,6 +119,10 @@ export default function RegionalSalesBreakdown() {
   const [selectedQuarter, setSelectedQuarter] = useState(
     quarters[quarters.length - 1]?.quarter ?? 1
   );
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [bulkOperationId, setBulkOperationId] = useState<string | null>(null);
 
   const quartersForYear = useMemo(
     () => quarters.filter((q) => q.year === selectedYear),
@@ -88,7 +137,7 @@ export default function RegionalSalesBreakdown() {
     [quarters, selectedYear, selectedQuarter]
   );
 
-  const query = selectedOption ? buildQuery(selectedOption) : "";
+  const orderFilter = selectedOption ? buildOrderFilter(selectedOption) : "";
 
   function handleYearChange(year: number) {
     setSelectedYear(year);
@@ -98,9 +147,47 @@ export default function RegionalSalesBreakdown() {
     }
   }
 
-  function handleGetReport() {
-    // TODO: make API request with query
-    console.log("Query:", query);
+  async function handleGetReport() {
+    if (!session || !selectedOption) return;
+    setLoading(true);
+    setError(null);
+    setStatus("Starting bulk operation...");
+
+    try {
+      const mutation = buildBulkMutation(orderFilter);
+      const res = await fetch(GRAPHQL_PROXY, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop: session.shop,
+          access_token: session.accessToken,
+          query: mutation,
+        }),
+      });
+      const json = await res.json();
+
+      const bulkOp = json.data?.bulkOperationRunQuery?.bulkOperation;
+      const userErrors = json.data?.bulkOperationRunQuery?.userErrors;
+
+      if (userErrors?.length) {
+        throw new Error(
+          userErrors.map((e: { message: string }) => e.message).join(", ")
+        );
+      }
+      if (!bulkOp?.id) {
+        throw new Error("Failed to start bulk operation");
+      }
+
+      setBulkOperationId(bulkOp.id);
+      setStatus(`Bulk operation started (${bulkOp.status}). ID: ${bulkOp.id}`);
+
+      // TODO: poll for completion and fetch JSONL results
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setStatus("");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -152,16 +239,28 @@ export default function RegionalSalesBreakdown() {
         </div>
         <button
           onClick={handleGetReport}
-          disabled={!selectedOption}
+          disabled={!selectedOption || loading}
           className="px-4 py-2 text-sm font-medium text-white bg-gray-800 rounded-lg hover:bg-gray-700 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          Get Report
+          {loading ? "Loading..." : "Get Report"}
         </button>
       </div>
 
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20 p-4 mb-4">
+          <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
+        </div>
+      )}
+
+      {status && (
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          {status}
+        </p>
+      )}
+
       {selectedOption && (
         <p className="text-xs text-gray-400 dark:text-gray-500 font-mono">
-          {query}
+          {orderFilter}
         </p>
       )}
     </div>
