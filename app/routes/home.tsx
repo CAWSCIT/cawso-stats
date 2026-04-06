@@ -51,6 +51,14 @@ export default function Home() {
                   Inventory Report
                 </Link>
               </li>
+              <li>
+                <Link
+                  to="/annual-sales"
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gray-800 rounded-lg hover:bg-gray-700 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors"
+                >
+                  Annual Sales by Month
+                </Link>
+              </li>
             </ul>
           </nav>
         </div>
