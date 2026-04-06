@@ -1,4 +1,4 @@
-import{w as O,p as e,v as w,a as g}from"./chunk-UVKPFVEO-B2WGzElT.js";import{u as P}from"./shop-context-BDiY6n4d.js";function G({}){return[{title:"Inventory Report"},{name:"description",content:"Shopify inventory report"}]}const E=`mutation {
+import{w as O,p as e,v as w,a as g}from"./chunk-UVKPFVEO-DTpB8cWg.js";import{u as P}from"./shop-context-BuLIcNy-.js";function G({}){return[{title:"Inventory Report"},{name:"description",content:"Shopify inventory report"}]}const E=`mutation {
   bulkOperationRunQuery(
     query: """
     {
