@@ -59,6 +59,14 @@ export default function Home() {
                   Annual Sales by Month
                 </Link>
               </li>
+              <li>
+                <Link
+                  to="/regional-sales-breakdown"
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gray-800 rounded-lg hover:bg-gray-700 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors"
+                >
+                  Regional Sales Breakdown
+                </Link>
+              </li>
             </ul>
           </nav>
         </div>
