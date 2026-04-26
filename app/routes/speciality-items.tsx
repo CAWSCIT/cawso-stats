@@ -427,6 +427,15 @@ export default function SpecialityItems() {
   );
 }
 
+const SEND_MANUFACTURER_EMAIL_ENDPOINT =
+  "https://cawso-stats.dal04.workers.dev/send-manufacturer-email";
+
+type SendStatus =
+  | { state: "idle" }
+  | { state: "sending" }
+  | { state: "success" }
+  | { state: "error"; message: string };
+
 function DetailsModal({
   state,
   onClose,
@@ -434,6 +443,48 @@ function DetailsModal({
   state: Exclude<DetailsState, { state: "closed" }>;
   onClose: () => void;
 }) {
+  const [sendStatus, setSendStatus] = useState<SendStatus>({ state: "idle" });
+
+  async function handleSend() {
+    if (state.state !== "loaded") return;
+    setSendStatus({ state: "sending" });
+    try {
+      const res = await fetch(SEND_MANUFACTURER_EMAIL_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderName: state.data.name,
+          items: state.data.items.map((i) => ({
+            name: i.name,
+            quantity: i.quantity,
+            sku: i.sku,
+          })),
+          shippingName: state.data.shippingName,
+          shippingAddress: state.data.shippingAddress,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSendStatus({
+          state: "error",
+          message: data?.error?.message || data?.message || `HTTP ${res.status}`,
+        });
+        return;
+      }
+      setSendStatus({ state: "success" });
+    } catch (err) {
+      setSendStatus({
+        state: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const sendDisabled =
+    state.state !== "loaded" ||
+    sendStatus.state === "sending" ||
+    sendStatus.state === "success";
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
@@ -443,12 +494,31 @@ function DetailsModal({
         className="w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col bg-white dark:bg-gray-900 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-4">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
             {state.state === "loaded"
               ? `Order ${state.data.name}`
               : "Order details"}
           </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors -mr-2 p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              className="w-5 h-5"
+            >
+              <path
+                fillRule="evenodd"
+                d="M4.28 3.22a.75.75 0 0 0-1.06 1.06L8.94 10l-5.72 5.72a.75.75 0 1 0 1.06 1.06L10 11.06l5.72 5.72a.75.75 0 1 0 1.06-1.06L11.06 10l5.72-5.72a.75.75 0 0 0-1.06-1.06L10 8.94 4.28 3.22Z"
+                clipRule="evenodd"
+              />
+            </svg>
+          </button>
         </div>
 
         <div className="px-6 py-4 overflow-y-auto flex-1">
@@ -535,21 +605,34 @@ function DetailsModal({
           )}
         </div>
 
-        <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-end gap-2">
+        <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex flex-col items-end gap-1">
           <button
             type="button"
-            onClick={onClose}
-            className="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+            onClick={handleSend}
+            disabled={sendDisabled}
+            className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-gray-900 rounded-md hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            Close
+            {sendStatus.state === "sending"
+              ? "Sending..."
+              : sendStatus.state === "success"
+                ? "Email sent"
+                : "Send email to manufacturer"}
           </button>
-          <button
-            type="button"
-            disabled={state.state !== "loaded"}
-            className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            Send email to manufacturer
-          </button>
+          {sendStatus.state === "error" && (
+            <p className="text-xs text-red-600 dark:text-red-400">
+              Failed to send: {sendStatus.message}
+            </p>
+          )}
+          {sendStatus.state === "success" && (
+            <p className="text-xs text-green-700 dark:text-green-400">
+              Email delivered to wendells@ca.org.
+            </p>
+          )}
+          {sendStatus.state !== "error" && sendStatus.state !== "success" && (
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              When you send this email to the manufacturer, it will email them along with ast.mgr@ca.org
+            </p>
+          )}
         </div>
       </div>
     </div>

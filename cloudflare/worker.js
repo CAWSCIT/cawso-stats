@@ -121,6 +121,83 @@ export default {
         });
       }
 
+      // POST /send-manufacturer-email - email manufacturer with order details
+      if (path === '/send-manufacturer-email') {
+        const body = await request.json();
+        const { orderName, items, shippingName, shippingAddress } = body;
+
+        if (!orderName || !Array.isArray(items) || items.length === 0) {
+          return new Response(
+            JSON.stringify({ error: 'orderName and items are required' }),
+            {
+              status: 400,
+              headers: { 'Content-Type': 'application/json', ...corsHeaders },
+            }
+          );
+        }
+
+        const escapeHtml = (s) =>
+          String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+
+        const itemsHtml = items
+          .map((item) => {
+            const name = escapeHtml(item.name);
+            const qty = escapeHtml(item.quantity);
+            const sku = item.sku ? ` (SKU: ${escapeHtml(item.sku)})` : '';
+            return `<li>${qty} × ${name}${sku}</li>`;
+          })
+          .join('');
+
+        const addressLines = Array.isArray(shippingAddress)
+          ? shippingAddress
+          : [];
+        const addressHtml = [shippingName, ...addressLines]
+          .filter(Boolean)
+          .map((line) => escapeHtml(line))
+          .join('<br />');
+
+        const html = `
+          <p>Hello,</p>
+          <p>Hope you're doing well. We have a new specialty medallion order from CAWSO (${escapeHtml(
+            orderName
+          )}) that needs to be drop shipped to the customer below.</p>
+          <p><strong>Items:</strong></p>
+          <ul>${itemsHtml}</ul>
+          <p><strong>Ship to:</strong><br />${addressHtml || '(no shipping address on file)'}</p>
+          <p>Thank you!</p>
+          <p style="color:#555;font-size:12px;">The assistant manager of CAWSO has CC'd. For questions or clarification, please call them.</p>
+        `;
+
+        const resendRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${env.RESEND_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: 'no-reply@email.ca-connect.org',
+            to: [`${env.SPECIALTY_MANUFACTURER_EMAIL}`],
+            cc: ['ast.mgr@ca.org'],
+            bcc: ['dal04@ca.org'],
+            reply_to: 'ast.mgr@ca.org',
+            subject: 'Specialty Medallion Order from CAWSO',
+            html,
+          }),
+        });
+
+        const data = await resendRes.json();
+
+        return new Response(JSON.stringify(data), {
+          status: resendRes.status,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        });
+      }
+
       return new Response(JSON.stringify({ error: 'Not found' }), {
         status: 404,
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
