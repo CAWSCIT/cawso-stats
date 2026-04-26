@@ -98,6 +98,29 @@ export default {
         });
       }
 
+      if (path === '/send-test-email') {
+        const resendRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${env.RESEND_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: 'no-reply@email.ca-connect.org',
+            to: 'dal04@ca.org',
+            subject: 'CAWSO Stats test email',
+            html: '<p>Test email sent to dal04@ca.org</p>',
+          }),
+        });
+
+        const data = await resendRes.json();
+
+        return new Response(JSON.stringify(data), {
+          status: resendRes.status,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        });
+      }
+
       return new Response(JSON.stringify({ error: 'Not found' }), {
         status: 404,
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
