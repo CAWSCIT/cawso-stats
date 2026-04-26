@@ -28,7 +28,7 @@ Exchanges a Shopify `id_token` for an online access token.
 **JavaScript example:**
 
 ```js
-const res = await fetch('https://throbbing-frog-a6d8.kalob-taulien.workers.dev/auth', {
+const res = await fetch('https://cawso-stats.dal04.workers.dev/auth', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -56,7 +56,7 @@ Proxies a GraphQL query to the Shopify Admin API (`/admin/api/2025-01/graphql.js
 **JavaScript example - start a bulk operation:**
 
 ```js
-const res = await fetch('https://throbbing-frog-a6d8.kalob-taulien.workers.dev/graphql', {
+const res = await fetch('https://cawso-stats.dal04.workers.dev/graphql', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -96,7 +96,7 @@ const data = await res.json();
 **JavaScript example - poll for bulk operation status:**
 
 ```js
-const res = await fetch('https://throbbing-frog-a6d8.kalob-taulien.workers.dev/graphql', {
+const res = await fetch('https://cawso-stats.dal04.workers.dev/graphql', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({

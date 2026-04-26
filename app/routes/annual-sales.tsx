@@ -20,7 +20,7 @@ export function meta({}: Route.MetaArgs) {
 }
 
 const GRAPHQL_PROXY =
-  "https://throbbing-frog-a6d8.kalob-taulien.workers.dev/graphql";
+  "https://cawso-stats.dal04.workers.dev/graphql";
 
 const SALES_QUERY = `query {
   shopifyqlQuery(query: "FROM sales SHOW total_sales GROUP BY month SINCE -1y ORDER BY month") {

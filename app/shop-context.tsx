@@ -21,7 +21,7 @@ export function useShopSession() {
   return useContext(ShopContext);
 }
 
-const AUTH_ENDPOINT = "https://throbbing-frog-a6d8.kalob-taulien.workers.dev/auth";
+const AUTH_ENDPOINT = "https://cawso-stats.dal04.workers.dev/auth";
 
 export function ShopProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<ShopSession | null>(null);

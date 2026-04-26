@@ -35,7 +35,7 @@ cloudflare/
 
 Two modes:
 
-1. **Embedded Shopify**: URL params (`id_token`, `shop`, etc.) are POSTed to `https://throbbing-frog-a6d8.kalob-taulien.workers.dev/auth` which exchanges the token with Shopify and returns `{ shop, access_token }`
+1. **Embedded Shopify**: URL params (`id_token`, `shop`, etc.) are POSTed to `https://cawso-stats.dal04.workers.dev/auth` which exchanges the token with Shopify and returns `{ shop, access_token }`
 2. **Local testing override**: Add `?access_token=xxx&shop=yyy` to the URL to skip the Cloudflare auth flow entirely
 
 The `ShopProvider` in `root.tsx` handles both cases and exposes `useShopSession()` hook globally.

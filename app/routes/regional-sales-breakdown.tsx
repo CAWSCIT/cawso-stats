@@ -65,7 +65,7 @@ const AREAS_URL =
   "https://raw.githubusercontent.com/CAWSCIT/area-maps/refs/heads/main/src/areas/Areas.json";
 
 const GRAPHQL_PROXY =
-  "https://throbbing-frog-a6d8.kalob-taulien.workers.dev/graphql";
+  "https://cawso-stats.dal04.workers.dev/graphql";
 
 interface OrderLine {
   name: string;

@@ -114,7 +114,7 @@ const POLL_QUERY = `query {
   }
 }`;
 
-const GRAPHQL_PROXY = "https://throbbing-frog-a6d8.kalob-taulien.workers.dev/graphql";
+const GRAPHQL_PROXY = "https://cawso-stats.dal04.workers.dev/graphql";
 
 async function shopifyGraphQL(shop: string, accessToken: string, query: string) {
   const res = await fetch(GRAPHQL_PROXY, {
