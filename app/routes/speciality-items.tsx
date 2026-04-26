@@ -160,9 +160,148 @@ function orderIdFromGid(gid: string): string {
   return gid.split("/").pop() ?? gid;
 }
 
+function buildOrderDetailsQuery(orderGid: string): string {
+  const escaped = orderGid.replace(/"/g, '\\"');
+  return `query getSpecialityOrderByGID {
+    order(id: "${escaped}") {
+      id
+      name
+      createdAt
+      shippingAddress {
+        name
+        formatted
+      }
+      lineItems(first: 100) {
+        nodes {
+          id
+          name
+          quantity
+          sku
+          product {
+            collections(first: 5) {
+              nodes {
+                id
+              }
+            }
+          }
+        }
+      }
+    }
+  }`;
+}
+
+interface OrderDetailsResponse {
+  id: string;
+  name: string;
+  createdAt: string;
+  shippingAddress: {
+    name: string | null;
+    formatted: string[];
+  } | null;
+  lineItems: {
+    nodes: {
+      id: string;
+      name: string;
+      quantity: number;
+      sku: string | null;
+      product: {
+        collections: { nodes: { id: string }[] };
+      } | null;
+    }[];
+  };
+}
+
+interface OrderDetailsView {
+  id: string;
+  name: string;
+  createdAt: string;
+  shippingName: string;
+  shippingAddress: string[];
+  items: { id: string; name: string; quantity: number; sku: string | null }[];
+}
+
+function parseOrderDetails(order: OrderDetailsResponse): OrderDetailsView {
+  const items = order.lineItems.nodes
+    .filter((li) =>
+      li.product?.collections.nodes.some(
+        (c) => c.id === SPECIALITY_COLLECTION_ID
+      )
+    )
+    .map((li) => ({
+      id: li.id,
+      name: li.name,
+      quantity: li.quantity,
+      sku: li.sku,
+    }));
+
+  return {
+    id: order.id,
+    name: order.name,
+    createdAt: order.createdAt,
+    shippingName: order.shippingAddress?.name ?? "",
+    shippingAddress: order.shippingAddress?.formatted ?? [],
+    items,
+  };
+}
+
+type DetailsState =
+  | { state: "closed" }
+  | { state: "loading"; orderId: string }
+  | { state: "loaded"; data: OrderDetailsView }
+  | { state: "error"; message: string };
+
 export default function SpecialityItems() {
   const { session } = useShopSession();
   const { orders, loaded, error } = useSpecialityData();
+  const [details, setDetails] = useState<DetailsState>({ state: "closed" });
+
+  const openDetails = useCallback(
+    async (orderGid: string) => {
+      if (!session) return;
+      setDetails({ state: "loading", orderId: orderGid });
+      try {
+        const res = await fetch(GRAPHQL_PROXY, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shop: session.shop,
+            access_token: session.accessToken,
+            query: buildOrderDetailsQuery(orderGid),
+          }),
+        });
+        const json = await res.json();
+        if (json.errors) {
+          throw new Error(
+            json.errors.map((e: { message: string }) => e.message).join(", ")
+          );
+        }
+        if (!json.data?.order) {
+          throw new Error("Order not found");
+        }
+        setDetails({
+          state: "loaded",
+          data: parseOrderDetails(json.data.order),
+        });
+      } catch (err) {
+        setDetails({
+          state: "error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+    [session]
+  );
+
+  const closeDetails = useCallback(() => setDetails({ state: "closed" }), []);
+
+  useEffect(() => {
+    if (details.state === "closed") return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") closeDetails();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [details.state, closeDetails]);
 
   if (!loaded) {
     return (
@@ -268,6 +407,7 @@ export default function SpecialityItems() {
                   <td className="px-4 py-3 text-right">
                     <button
                       type="button"
+                      onClick={() => openDetails(order.id)}
                       className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-white bg-gray-800 rounded-md hover:bg-gray-700 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors"
                     >
                       View details
@@ -279,6 +419,139 @@ export default function SpecialityItems() {
           </table>
         </div>
       )}
+
+      {details.state !== "closed" && (
+        <DetailsModal state={details} onClose={closeDetails} />
+      )}
+    </div>
+  );
+}
+
+function DetailsModal({
+  state,
+  onClose,
+}: {
+  state: Exclude<DetailsState, { state: "closed" }>;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col bg-white dark:bg-gray-900 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+            {state.state === "loaded"
+              ? `Order ${state.data.name}`
+              : "Order details"}
+          </h2>
+        </div>
+
+        <div className="px-6 py-4 overflow-y-auto flex-1">
+          {state.state === "loading" && (
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Loading order...
+            </p>
+          )}
+
+          {state.state === "error" && (
+            <div className="rounded-lg border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20 p-4">
+              <p className="text-sm text-red-700 dark:text-red-400">
+                {state.message}
+              </p>
+            </div>
+          )}
+
+          {state.state === "loaded" && (
+            <div className="space-y-4">
+              <div>
+                <p className="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">
+                  Placed
+                </p>
+                <p className="text-sm text-gray-900 dark:text-gray-100">
+                  {formatDate(state.data.createdAt)}
+                </p>
+              </div>
+
+              {(state.data.shippingName || state.data.shippingAddress.length > 0) && (
+                <div>
+                  <p className="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">
+                    Ship to
+                  </p>
+                  {state.data.shippingName && (
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                      {state.data.shippingName}
+                    </p>
+                  )}
+                  {state.data.shippingAddress.map((line, i) => (
+                    <p
+                      key={i}
+                      className="text-sm text-gray-700 dark:text-gray-300"
+                    >
+                      {line}
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              <div>
+                <p className="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+                  Speciality items ({state.data.items.length})
+                </p>
+                {state.data.items.length === 0 ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    No speciality items on this order.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-md">
+                    {state.data.items.map((item) => (
+                      <li
+                        key={item.id}
+                        className="px-3 py-2 flex items-start justify-between gap-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm text-gray-900 dark:text-gray-100">
+                            {item.name}
+                          </p>
+                          {item.sku && (
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                              SKU: {item.sku}
+                            </p>
+                          )}
+                        </div>
+                        <p className="text-sm tabular-nums text-gray-700 dark:text-gray-300 shrink-0">
+                          × {item.quantity}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            disabled={state.state !== "loaded"}
+            className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Send email to manufacturer
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
