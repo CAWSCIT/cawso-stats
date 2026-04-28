@@ -110,6 +110,14 @@ export default function Home() {
                   Speciality Items
                 </Link>
               </li>
+              <li>
+                <Link
+                  to="/speciality-sales"
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gray-800 rounded-lg hover:bg-gray-700 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors"
+                >
+                  Speciality Sales Totals
+                </Link>
+              </li>
             </ul>
           </nav>
 
