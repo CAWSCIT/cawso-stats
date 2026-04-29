@@ -6,5 +6,9 @@ export default [
   route("annual-sales", "routes/annual-sales.tsx"),
   route("regional-sales-breakdown", "routes/regional-sales-breakdown.tsx"),
   route("speciality-items", "routes/speciality-items.tsx"),
-  route("speciality-sales", "routes/speciality-sales.tsx"),
+  route("collection-breakdown", "routes/collection-breakdown.tsx"),
+  route(
+    "collection-breakdown/:collectionId",
+    "routes/collection-breakdown-detail.tsx"
+  ),
 ] satisfies RouteConfig;

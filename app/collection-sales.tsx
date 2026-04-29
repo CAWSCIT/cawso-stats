@@ -1,31 +1,80 @@
-import { useState, useCallback, useEffect, useRef } from "react";
-import { Link } from "react-router";
-import type { Route } from "./+types/speciality-sales";
-import { useShopSession } from "../shop-context";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useShopSession } from "./shop-context";
 
-export function meta({}: Route.MetaArgs) {
-  return [
-    { title: "Specialty Medallion Sales & Discounts" },
-    {
-      name: "description",
-      content: "Total quantity and dollar value sold of speciality items",
-    },
-  ];
+export const GRAPHQL_PROXY = "https://cawso-stats.dal04.workers.dev/graphql";
+
+// Safety cap so an unbounded loop can't run away if Shopify keeps returning pages.
+const MAX_ORDER_PAGES = 100;
+
+export const COLLECTION_GID_PREFIX = "gid://shopify/Collection/";
+
+export function toCollectionGid(idOrGid: string): string {
+  if (idOrGid.startsWith(COLLECTION_GID_PREFIX)) return idOrGid;
+  return `${COLLECTION_GID_PREFIX}${idOrGid}`;
 }
 
-const GRAPHQL_PROXY = "https://cawso-stats.dal04.workers.dev/graphql";
-const SPECIALITY_COLLECTION_ID = "gid://shopify/Collection/452293460201";
+export function collectionNumericId(gid: string): string {
+  return gid.startsWith(COLLECTION_GID_PREFIX)
+    ? gid.slice(COLLECTION_GID_PREFIX.length)
+    : gid;
+}
 
-const COLLECTION_PRODUCTS_QUERY = `query getSpecialityCollectionProducts {
-  collection(id: "${SPECIALITY_COLLECTION_ID}") {
-    products(first: 250) {
-      nodes {
-        id
-        title
+export interface CollectionProduct {
+  id: string;
+  title: string;
+}
+
+export interface ProductTotal {
+  id: string;
+  title: string;
+  quantity: number;
+  amount: number;
+  discount: number;
+}
+
+export interface SalesTotals {
+  collectionId: string;
+  collectionTitle: string;
+  totalQuantity: number;
+  totalAmount: number;
+  totalDiscount: number;
+  ordersScanned: number;
+  ordersWithMatch: number;
+  perProduct: ProductTotal[];
+  collectionProducts: CollectionProduct[];
+}
+
+interface OrderLineItem {
+  quantity: number;
+  originalTotalSet: { shopMoney: { amount: string } };
+  discountedTotalSet: { shopMoney: { amount: string } };
+  discountAllocations: {
+    allocatedAmountSet: { shopMoney: { amount: string } };
+  }[];
+  product: { id: string } | null;
+}
+
+interface OrderNode {
+  id: string;
+  name: string;
+  lineItems: { nodes: OrderLineItem[] };
+}
+
+function buildCollectionProductsQuery(collectionGid: string): string {
+  return `query getCollectionProducts {
+    collection(id: "${collectionGid}") {
+      id
+      title
+      handle
+      products(first: 250) {
+        nodes {
+          id
+          title
+        }
       }
     }
-  }
-}`;
+  }`;
+}
 
 function buildOrdersPageQuery(after: string | null): string {
   const afterArg = after ? `, after: "${after}"` : "";
@@ -68,50 +117,10 @@ function buildOrdersPageQuery(after: string | null): string {
   }`;
 }
 
-interface CollectionProduct {
-  id: string;
-  title: string;
-}
-
-interface OrderLineItem {
-  quantity: number;
-  originalTotalSet: { shopMoney: { amount: string } };
-  discountedTotalSet: { shopMoney: { amount: string } };
-  discountAllocations: {
-    allocatedAmountSet: { shopMoney: { amount: string } };
-  }[];
-  product: { id: string } | null;
-}
-
-interface OrderNode {
-  id: string;
-  name: string;
-  lineItems: { nodes: OrderLineItem[] };
-}
-
-interface ProductTotal {
-  id: string;
-  title: string;
-  quantity: number;
-  amount: number;
-  discount: number;
-}
-
-interface SalesTotals {
-  totalQuantity: number;
-  totalAmount: number;
-  totalDiscount: number;
-  ordersScanned: number;
-  ordersWithSpeciality: number;
-  perProduct: ProductTotal[];
-  collectionProducts: CollectionProduct[];
-}
-
 // Shopify usually returns `errors` as `[{ message }]`, but in some cases
 // (throttling, network/proxy errors) it's a string or a single object. The
 // Cloudflare worker also returns `{ error: "..." }` for its own failures.
-// Normalize all of these into a single string.
-function extractGraphqlErrorMessage(json: unknown): string | null {
+export function extractGraphqlErrorMessage(json: unknown): string | null {
   if (!json || typeof json !== "object") return null;
   const obj = json as Record<string, unknown>;
 
@@ -141,7 +150,7 @@ function extractGraphqlErrorMessage(json: unknown): string | null {
   return null;
 }
 
-function formatCurrency(value: number): string {
+export function formatCurrency(value: number): string {
   return value.toLocaleString("en-US", {
     style: "currency",
     currency: "USD",
@@ -149,21 +158,33 @@ function formatCurrency(value: number): string {
   });
 }
 
-// Safety cap so an unbounded loop can't run away if Shopify keeps returning pages.
-const MAX_ORDER_PAGES = 100;
+// Module-level cache, keyed by collection GID, so navigating away and back
+// doesn't re-scan thousands of orders.
+const cache = new Map<string, SalesTotals>();
 
-let cachedTotals: SalesTotals | null = null;
+export interface UseCollectionSalesResult {
+  totals: SalesTotals | null;
+  loading: boolean;
+  progress: { pages: number; orders: number };
+  error: string | null;
+  reload: () => Promise<void>;
+}
 
-function useSpecialitySales() {
+export function useCollectionSales(
+  collectionId: string
+): UseCollectionSalesResult {
+  const collectionGid = toCollectionGid(collectionId);
   const { session } = useShopSession();
-  const [totals, setTotals] = useState<SalesTotals | null>(cachedTotals);
+  const [totals, setTotals] = useState<SalesTotals | null>(
+    cache.get(collectionGid) ?? null
+  );
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<{ pages: number; orders: number }>({
     pages: 0,
     orders: 0,
   });
   const [error, setError] = useState<string | null>(null);
-  const hasRun = useRef(false);
+  const hasRunFor = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -172,14 +193,14 @@ function useSpecialitySales() {
     setProgress({ pages: 0, orders: 0 });
 
     try {
-      // 1. Get the products in the speciality collection.
+      // 1. Get the products + title for this collection.
       const collectionRes = await fetch(GRAPHQL_PROXY, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shop: session.shop,
           access_token: session.accessToken,
-          query: COLLECTION_PRODUCTS_QUERY,
+          query: buildCollectionProductsQuery(collectionGid),
         }),
       });
       const collectionJson = await collectionRes.json();
@@ -187,8 +208,13 @@ function useSpecialitySales() {
       if (collectionErr) {
         throw new Error(collectionErr);
       }
+      const collectionNode = collectionJson.data?.collection;
+      if (!collectionNode) {
+        throw new Error("Collection not found");
+      }
+      const collectionTitle: string = collectionNode.title ?? "Collection";
       const collectionProducts: CollectionProduct[] =
-        collectionJson.data?.collection?.products?.nodes ?? [];
+        collectionNode.products?.nodes ?? [];
       const productIds = new Set(collectionProducts.map((p) => p.id));
       const productTitleById = new Map(
         collectionProducts.map((p) => [p.id, p.title])
@@ -200,7 +226,7 @@ function useSpecialitySales() {
       let totalAmount = 0;
       let totalDiscount = 0;
       let ordersScanned = 0;
-      let ordersWithSpeciality = 0;
+      let ordersWithMatch = 0;
 
       let after: string | null = null;
       let hasNextPage: boolean = true;
@@ -264,7 +290,7 @@ function useSpecialitySales() {
               });
             }
           }
-          if (orderHadMatch) ordersWithSpeciality += 1;
+          if (orderHadMatch) ordersWithMatch += 1;
         }
 
         setProgress({ pages: page, orders: ordersScanned });
@@ -279,61 +305,56 @@ function useSpecialitySales() {
       );
 
       const result: SalesTotals = {
+        collectionId: collectionGid,
+        collectionTitle,
         totalQuantity,
         totalAmount,
         totalDiscount,
         ordersScanned,
-        ordersWithSpeciality,
+        ordersWithMatch,
         perProduct,
         collectionProducts,
       };
 
-      cachedTotals = result;
+      cache.set(collectionGid, result);
       setTotals(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [session]);
+  }, [session, collectionGid]);
 
   useEffect(() => {
-    if (session && !cachedTotals && !hasRun.current) {
-      hasRun.current = true;
+    // When the collection changes, swap in cached value (if any) and only
+    // auto-load if this collection hasn't been fetched yet.
+    setTotals(cache.get(collectionGid) ?? null);
+    if (
+      session &&
+      !cache.has(collectionGid) &&
+      hasRunFor.current !== collectionGid
+    ) {
+      hasRunFor.current = collectionGid;
       load();
     }
-  }, [session, load]);
+  }, [session, collectionGid, load]);
 
   return { totals, loading, progress, error, reload: load };
 }
 
-export default function SpecialitySales() {
-  const { totals, loading, progress, error, reload } = useSpecialitySales();
-
+export function CollectionSalesView({
+  totals,
+  loading,
+  progress,
+  error,
+}: {
+  totals: SalesTotals | null;
+  loading: boolean;
+  progress: { pages: number; orders: number };
+  error: string | null;
+}) {
   return (
-    <div className="min-h-screen bg-white dark:bg-gray-950 p-8">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-4">
-          <Link
-            to="/"
-            className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
-          >
-            &larr; Back
-          </Link>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-            Specialty Medallion Sales & Discounts
-          </h1>
-        </div>
-        <button
-          type="button"
-          onClick={reload}
-          disabled={loading}
-          className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-white bg-gray-800 rounded-md hover:bg-gray-700 dark:bg-gray-700 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {loading ? "Loading..." : "Refresh"}
-        </button>
-      </div>
-
+    <>
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20 p-4 mb-6">
           <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
@@ -384,12 +405,12 @@ export default function SpecialitySales() {
 
           <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
             Scanned {totals.ordersScanned.toLocaleString()} orders;{" "}
-            {totals.ordersWithSpeciality.toLocaleString()} contained a
-            speciality item. Collection has{" "}
+            {totals.ordersWithMatch.toLocaleString()} contained an item from
+            this collection. Collection has{" "}
             {totals.collectionProducts.length} products.
           </p>
 
-          {totals.perProduct.length > 0 && (
+          {totals.perProduct.length > 0 ? (
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
               <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                 <thead className="bg-gray-50 dark:bg-gray-800/50">
@@ -463,9 +484,14 @@ export default function SpecialitySales() {
                 </tfoot>
               </table>
             </div>
+          ) : (
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              No orders contained any product from this collection (in the last{" "}
+              {totals.ordersScanned.toLocaleString()} orders scanned).
+            </p>
           )}
         </>
       )}
-    </div>
+    </>
   );
 }
