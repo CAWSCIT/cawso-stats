@@ -65,6 +65,7 @@ When "Load Inventory Report" is clicked:
 - **Sticky headers**: Product title + column headers stick to top on scroll (cannot combine with horizontal scroll overflow — sticky was prioritized)
 - **Production base path**: `/cawso-stats/` set in both `vite.config.ts` (`base`) and `react-router.config.ts` (`basename`)
 - **No SSR**: This is a client-side only app (`ssr: false`), no server
+- **Aggregating across all orders**: For "totals across all orders" reports (sum quantities, sum dollars, etc.), do not stop at `orders(first: 250)`. Walk the full `orders` connection with cursor pagination (`pageInfo { hasNextPage endCursor }` + `after:`), reduce each page in-memory as it arrives, and update a `setProgress({ pages, orders })` state so the UI shows live "scanned X orders across Y pages" progress while it runs. Keep a `MAX_ORDER_PAGES` safety cap. See `app/routes/speciality-sales.tsx` for the canonical implementation.
 
 ## Commands
 

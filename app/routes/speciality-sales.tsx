@@ -5,7 +5,7 @@ import { useShopSession } from "../shop-context";
 
 export function meta({}: Route.MetaArgs) {
   return [
-    { title: "Speciality Sales Totals" },
+    { title: "Specialty Medallion Sales & Discounts" },
     {
       name: "description",
       content: "Total quantity and dollar value sold of speciality items",
@@ -46,6 +46,18 @@ function buildOrdersPageQuery(after: string | null): string {
                 amount
               }
             }
+            discountedTotalSet {
+              shopMoney {
+                amount
+              }
+            }
+            discountAllocations {
+              allocatedAmountSet {
+                shopMoney {
+                  amount
+                }
+              }
+            }
             product {
               id
             }
@@ -64,6 +76,10 @@ interface CollectionProduct {
 interface OrderLineItem {
   quantity: number;
   originalTotalSet: { shopMoney: { amount: string } };
+  discountedTotalSet: { shopMoney: { amount: string } };
+  discountAllocations: {
+    allocatedAmountSet: { shopMoney: { amount: string } };
+  }[];
   product: { id: string } | null;
 }
 
@@ -78,15 +94,51 @@ interface ProductTotal {
   title: string;
   quantity: number;
   amount: number;
+  discount: number;
 }
 
 interface SalesTotals {
   totalQuantity: number;
   totalAmount: number;
+  totalDiscount: number;
   ordersScanned: number;
   ordersWithSpeciality: number;
   perProduct: ProductTotal[];
   collectionProducts: CollectionProduct[];
+}
+
+// Shopify usually returns `errors` as `[{ message }]`, but in some cases
+// (throttling, network/proxy errors) it's a string or a single object. The
+// Cloudflare worker also returns `{ error: "..." }` for its own failures.
+// Normalize all of these into a single string.
+function extractGraphqlErrorMessage(json: unknown): string | null {
+  if (!json || typeof json !== "object") return null;
+  const obj = json as Record<string, unknown>;
+
+  if (Array.isArray(obj.errors)) {
+    if (obj.errors.length === 0) return null;
+    return obj.errors
+      .map((e) => {
+        if (typeof e === "string") return e;
+        if (e && typeof e === "object" && "message" in e) {
+          return String((e as { message: unknown }).message);
+        }
+        return JSON.stringify(e);
+      })
+      .join(", ");
+  }
+
+  if (typeof obj.errors === "string") return obj.errors;
+  if (obj.errors && typeof obj.errors === "object") {
+    return JSON.stringify(obj.errors);
+  }
+
+  if (typeof obj.error === "string") return obj.error;
+  if (obj.error && typeof obj.error === "object") {
+    return JSON.stringify(obj.error);
+  }
+
+  return null;
 }
 
 function formatCurrency(value: number): string {
@@ -131,12 +183,9 @@ function useSpecialitySales() {
         }),
       });
       const collectionJson = await collectionRes.json();
-      if (collectionJson.errors) {
-        throw new Error(
-          collectionJson.errors
-            .map((e: { message: string }) => e.message)
-            .join(", ")
-        );
+      const collectionErr = extractGraphqlErrorMessage(collectionJson);
+      if (collectionErr) {
+        throw new Error(collectionErr);
       }
       const collectionProducts: CollectionProduct[] =
         collectionJson.data?.collection?.products?.nodes ?? [];
@@ -149,6 +198,7 @@ function useSpecialitySales() {
       const perProductMap = new Map<string, ProductTotal>();
       let totalQuantity = 0;
       let totalAmount = 0;
+      let totalDiscount = 0;
       let ordersScanned = 0;
       let ordersWithSpeciality = 0;
 
@@ -168,12 +218,9 @@ function useSpecialitySales() {
           }),
         });
         const ordersJson = await ordersRes.json();
-        if (ordersJson.errors) {
-          throw new Error(
-            ordersJson.errors
-              .map((e: { message: string }) => e.message)
-              .join(", ")
-          );
+        const ordersErr = extractGraphqlErrorMessage(ordersJson);
+        if (ordersErr) {
+          throw new Error(ordersErr);
         }
 
         const ordersData = ordersJson.data?.orders;
@@ -186,20 +233,34 @@ function useSpecialitySales() {
             const pid = li.product?.id;
             if (!pid || !productIds.has(pid)) continue;
             orderHadMatch = true;
-            const amount = Number(li.originalTotalSet.shopMoney.amount) || 0;
+            const original = Number(li.originalTotalSet.shopMoney.amount) || 0;
+            const discounted =
+              Number(li.discountedTotalSet.shopMoney.amount) || 0;
+            // Line-level discount + this line's slice of any order-level
+            // discount (discountAllocations covers shipping-excluded order
+            // discounts allocated to this line).
+            const orderLevelDiscount = li.discountAllocations.reduce(
+              (sum, a) =>
+                sum + (Number(a.allocatedAmountSet.shopMoney.amount) || 0),
+              0
+            );
+            const lineDiscount = original - discounted + orderLevelDiscount;
             totalQuantity += li.quantity;
-            totalAmount += amount;
+            totalAmount += original;
+            totalDiscount += lineDiscount;
 
             const existing = perProductMap.get(pid);
             if (existing) {
               existing.quantity += li.quantity;
-              existing.amount += amount;
+              existing.amount += original;
+              existing.discount += lineDiscount;
             } else {
               perProductMap.set(pid, {
                 id: pid,
                 title: productTitleById.get(pid) ?? pid,
                 quantity: li.quantity,
-                amount,
+                amount: original,
+                discount: lineDiscount,
               });
             }
           }
@@ -220,6 +281,7 @@ function useSpecialitySales() {
       const result: SalesTotals = {
         totalQuantity,
         totalAmount,
+        totalDiscount,
         ordersScanned,
         ordersWithSpeciality,
         perProduct,
@@ -259,7 +321,7 @@ export default function SpecialitySales() {
             &larr; Back
           </Link>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-            Speciality Sales Totals
+            Specialty Medallion Sales & Discounts
           </h1>
         </div>
         <button
@@ -293,7 +355,7 @@ export default function SpecialitySales() {
             </p>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-5">
               <p className="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
                 Total dollar value sold
@@ -308,6 +370,14 @@ export default function SpecialitySales() {
               </p>
               <p className="mt-2 text-3xl font-bold text-gray-900 dark:text-white">
                 {totals.totalQuantity.toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-5">
+              <p className="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                Total discounted (loss)
+              </p>
+              <p className="mt-2 text-3xl font-bold text-red-600 dark:text-red-400">
+                {formatCurrency(totals.totalDiscount)}
               </p>
             </div>
           </div>
@@ -333,6 +403,9 @@ export default function SpecialitySales() {
                     <th className="px-4 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">
                       Amount
                     </th>
+                    <th className="px-4 py-2 text-right text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">
+                      Discounted (loss)
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -350,6 +423,17 @@ export default function SpecialitySales() {
                       <td className="px-4 py-2 text-sm text-right tabular-nums text-gray-700 dark:text-gray-300">
                         {formatCurrency(row.amount)}
                       </td>
+                      <td
+                        className={`px-4 py-2 text-sm text-right tabular-nums ${
+                          row.discount > 0
+                            ? "text-red-600 dark:text-red-400"
+                            : "text-gray-500 dark:text-gray-500"
+                        }`}
+                      >
+                        {row.discount > 0
+                          ? `-${formatCurrency(row.discount)}`
+                          : formatCurrency(0)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -363,6 +447,17 @@ export default function SpecialitySales() {
                     </td>
                     <td className="px-4 py-2 text-sm font-semibold text-right tabular-nums text-gray-900 dark:text-gray-100">
                       {formatCurrency(totals.totalAmount)}
+                    </td>
+                    <td
+                      className={`px-4 py-2 text-sm font-semibold text-right tabular-nums ${
+                        totals.totalDiscount > 0
+                          ? "text-red-600 dark:text-red-400"
+                          : "text-gray-900 dark:text-gray-100"
+                      }`}
+                    >
+                      {totals.totalDiscount > 0
+                        ? `-${formatCurrency(totals.totalDiscount)}`
+                        : formatCurrency(0)}
                     </td>
                   </tr>
                 </tfoot>
