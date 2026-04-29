@@ -1,4 +1,4 @@
-import{w,a as i,p as e,v as u}from"./chunk-UVKPFVEO-DTpB8cWg.js";import{u as f}from"./shop-context-hL_4j7mc.js";function q({}){return[{title:"Speciality Items"},{name:"description",content:"Orders containing speciality medallion items"}]}const k="https://cawso-stats.dal04.workers.dev/graphql",b="gid://shopify/Collection/452293460201",v=`query getSpecialityMedallions {
+import{w,a as i,p as e,v as u}from"./chunk-UVKPFVEO-BpGGSgSy.js";import{u as f}from"./shop-context-wHUHkOVG.js";function q({}){return[{title:"Speciality Items"},{name:"description",content:"Orders containing speciality medallion items"}]}const k="https://cawso-stats.dal04.workers.dev/graphql",b="gid://shopify/Collection/452293460201",v=`query getSpecialityMedallions {
   orders(first: 250, sortKey: CREATED_AT, reverse: true) {
     nodes {
       id
