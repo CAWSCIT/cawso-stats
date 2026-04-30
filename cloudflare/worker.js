@@ -106,10 +106,16 @@ export default {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            from: 'no-reply@email.ca-connect.org',
+            from: 'CAWSO <no-reply@email.ca-connect.org>',
             to: 'dal04@ca.org',
             subject: 'CAWSO Stats test email',
-            html: '<p>Test email sent to dal04@ca.org</p>',
+            html: `<p>Test email sent to dal04@ca.org</p>
+              <p style="color:#555;font-size:12px;">
+                C. A. World Service Office<br />
+                11460 N. Cave Creek Rd, Ste 12<br />
+                Phoenix&nbsp;&nbsp;Arizona 85020<br />
+                310.559.5833
+              </p>`,
           }),
         });
 
@@ -171,6 +177,12 @@ export default {
           <p><strong>Ship to:</strong><br />${addressHtml || '(no shipping address on file)'}</p>
           <p>Thank you!</p>
           <p style="color:#555;font-size:12px;">The assistant manager of CAWSO has CC'd. For questions or clarification, please call them.</p>
+          <p style="color:#555;font-size:12px;">
+            C. A. World Service Office<br />
+            11460 N. Cave Creek Rd, Ste 12<br />
+            Phoenix&nbsp;&nbsp;Arizona 85020<br />
+            310.559.5833
+          </p>
         `;
 
         const resendRes = await fetch('https://api.resend.com/emails', {
@@ -180,7 +192,7 @@ export default {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            from: 'no-reply@email.ca-connect.org',
+            from: 'CAWSO <no-reply@email.ca-connect.org>',
             to: [`${env.SPECIALTY_MANUFACTURER_EMAIL}`],
             cc: ['ast.mgr@ca.org'],
             bcc: ['dal04@ca.org'],
